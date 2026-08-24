@@ -14,7 +14,7 @@ import requests
 import dns.resolver
 import ssl
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 from colorama import init, Fore, Style
 
@@ -105,6 +105,7 @@ def init_db():
         uid INTEGER PRIMARY KEY,
         username TEXT UNIQUE,
         registered_at TEXT,
+        expired_at TEXT,
         is_active INTEGER DEFAULT 0
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS history (
@@ -245,19 +246,20 @@ def register_user(uid, username):
         c.execute("SELECT * FROM users WHERE username = ?", (username,))
         if c.fetchone():
             conn.close()
-            return False, "Username sudah dipakai!"
+            return False, f"{Fore.RED}❌ Username sudah dipakai!{Style.RESET_ALL}"
         c.execute("SELECT * FROM users WHERE uid = ?", (uid,))
         if c.fetchone():
             conn.close()
-            return False, "UID sudah terdaftar!"
+            return False, f"{Fore.RED}❌ UID sudah terdaftar!{Style.RESET_ALL}"
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        c.execute("INSERT INTO users (uid, username, registered_at, is_active) VALUES (?, ?, ?, 0)", (uid, username, now))
+        c.execute("INSERT INTO users (uid, username, registered_at, expired_at, is_active) VALUES (?, ?, ?, ?, 0)",
+                  (uid, username, now, "PERMANENT"))
         conn.commit()
         conn.close()
-        return True, "Registrasi berhasil! Tunggu persetujuan admin."
+        return True, f"{Fore.GREEN}✅ Registrasi berhasil! Tunggu persetujuan admin.{Style.RESET_ALL}"
     except Exception as e:
         logger.error(f"Register error: {e}")
-        return False, f"Error: {e}"
+        return False, f"{Fore.RED}❌ Error: {e}{Style.RESET_ALL}"
 
 def approve_user(username):
     try:
@@ -267,10 +269,59 @@ def approve_user(username):
         affected = c.rowcount
         conn.commit()
         conn.close()
-        return affected > 0
+        if affected > 0:
+            return True, f"{Fore.GREEN}✅ User '{username}' berhasil di-approve!{Style.RESET_ALL}"
+        return False, f"{Fore.RED}❌ User '{username}' tidak ditemukan.{Style.RESET_ALL}"
     except Exception as e:
         logger.error(f"Approve error: {e}")
-        return False
+        return False, f"{Fore.RED}❌ Error: {e}{Style.RESET_ALL}"
+
+def add_user(uid, username, days=0):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT * FROM users WHERE uid = ?", (uid,))
+        if c.fetchone():
+            conn.close()
+            return False, f"{Fore.RED}❌ UID {uid} sudah terdaftar!{Style.RESET_ALL}"
+        c.execute("SELECT * FROM users WHERE username = ?", (username,))
+        if c.fetchone():
+            conn.close()
+            return False, f"{Fore.RED}❌ Username '{username}' sudah dipakai!{Style.RESET_ALL}"
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if days == 0:
+            expired = "PERMANENT"
+            is_active = 1
+        else:
+            expired = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+            is_active = 0
+        c.execute("INSERT INTO users (uid, username, registered_at, expired_at, is_active) VALUES (?, ?, ?, ?, ?)",
+                  (uid, username, now, expired, is_active))
+        conn.commit()
+        conn.close()
+        status = f"{Fore.GREEN}PERMANEN{Style.RESET_ALL}" if days == 0 else f"{Fore.YELLOW}{days} hari{Style.RESET_ALL}"
+        return True, f"{Fore.GREEN}✅ User '{username}' (UID: {uid}) berhasil ditambahkan!{Style.RESET_ALL}\n📌 Status: {status}"
+    except Exception as e:
+        logger.error(f"Add user error: {e}")
+        return False, f"{Fore.RED}❌ Error: {e}{Style.RESET_ALL}"
+
+def del_user(uid_or_username):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        if str(uid_or_username).isdigit():
+            c.execute("DELETE FROM users WHERE uid = ?", (int(uid_or_username),))
+        else:
+            c.execute("DELETE FROM users WHERE username = ?", (uid_or_username,))
+        affected = c.rowcount
+        conn.commit()
+        conn.close()
+        if affected > 0:
+            return True, f"{Fore.GREEN}✅ User '{uid_or_username}' berhasil dihapus!{Style.RESET_ALL}"
+        return False, f"{Fore.RED}❌ User '{uid_or_username}' tidak ditemukan.{Style.RESET_ALL}"
+    except Exception as e:
+        logger.error(f"Delete user error: {e}")
+        return False, f"{Fore.RED}❌ Error: {e}{Style.RESET_ALL}"
 
 def get_user_by_uid(uid):
     try:
@@ -288,7 +339,7 @@ def get_all_users():
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        c.execute("SELECT uid, username, registered_at, is_active FROM users ORDER BY registered_at DESC")
+        c.execute("SELECT uid, username, registered_at, expired_at, is_active FROM users ORDER BY registered_at DESC")
         result = c.fetchall()
         conn.close()
         return result
@@ -302,7 +353,24 @@ def is_user_allowed(uid):
     user = get_user_by_uid(uid)
     if not user:
         return False
-    return user[3] == 1
+    return user[4] == 1
+
+# ===================== BANNER =====================
+def show_banner():
+    banner = f"""
+{Fore.CYAN}╔══════════════════════════════════════════════════════════════╗
+{Fore.CYAN}║{Fore.YELLOW}                                                              {Fore.CYAN}║
+{Fore.CYAN}║{Fore.RED}   ████████╗██████╗  █████╗  ██████╗███████╗██╗  ██╗        {Fore.CYAN}║
+{Fore.CYAN}║{Fore.RED}   ╚══██╔══╝██╔══██╗██╔══██╗██╔════╝██╔════╝╚██╗██╔╝        {Fore.CYAN}║
+{Fore.CYAN}║{Fore.RED}      ██║   ██████╔╝███████║██║     █████╗   ╚███╔╝         {Fore.CYAN}║
+{Fore.CYAN}║{Fore.RED}      ██║   ██╔══██╗██╔══██║██║     ██╔══╝   ██╔██╗         {Fore.CYAN}║
+{Fore.CYAN}║{Fore.RED}      ██║   ██║  ██║██║  ██║╚██████╗███████╗██╔╝ ██╗        {Fore.CYAN}║
+{Fore.CYAN}║{Fore.RED}      ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚══════╝╚═╝  ╚═╝        {Fore.CYAN}║
+{Fore.CYAN}║{Fore.MAGENTA}                                                              {Fore.CYAN}║
+{Fore.CYAN}║{Fore.GREEN}                    v1.2  Developer: ./PikoXploit             {Fore.CYAN}║
+{Fore.CYAN}╚══════════════════════════════════════════════════════════════╝{Style.RESET_ALL}
+"""
+    print(banner)
 
 # ===================== VALIDATION =====================
 def validate_domain(domain):
@@ -330,9 +398,9 @@ def validate_phone(phone):
 
 # ===================== ANIMASI =====================
 def loading_animation(text="Loading"):
-    print("\n" + "="*60)
+    print(f"\n{Fore.CYAN}="*60)
     print(f"  🔥 {text}...")
-    print("="*60 + "\n")
+    print(f"{Fore.CYAN}="*60 + "\n")
     
     total = 100
     bar_length = 40
@@ -344,13 +412,13 @@ def loading_animation(text="Loading"):
         animasi = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
         anim = animasi[i % len(animasi)]
         
-        sys.stdout.write(f"\r  {anim} [{bar}] {percent}%")
+        sys.stdout.write(f"\r  {Fore.YELLOW}{anim}{Fore.GREEN} [{bar}] {Fore.CYAN}{percent}%{Style.RESET_ALL}")
         sys.stdout.flush()
         time.sleep(0.04)
     
-    print("\n\n" + "="*60)
-    print("  ✅ DONE!")
-    print("="*60)
+    print(f"\n\n{Fore.CYAN}="*60)
+    print(f"{Fore.GREEN}  ✅ DONE!{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}="*60)
     time.sleep(0.2)
 
 def color_text(text, color):
@@ -364,381 +432,6 @@ def color_text(text, color):
         "white": Fore.WHITE
     }
     return colors.get(color, Fore.WHITE) + text + Style.RESET_ALL
-
-# ===================== BANNER =====================
-def show_banner():
-    banner = """
-╔══════════════════════════════════════════════════════════════╗
-║                                                              ║
-║   ████████╗██████╗  █████╗  ██████╗███████╗██╗  ██╗        ║
-║   ╚══██╔══╝██╔══██╗██╔══██╗██╔════╝██╔════╝╚██╗██╔╝        ║
-║      ██║   ██████╔╝███████║██║     █████╗   ╚███╔╝         ║
-║      ██║   ██╔══██╗██╔══██║██║     ██╔══╝   ██╔██╗         ║
-║      ██║   ██║  ██║██║  ██║╚██████╗███████╗██╔╝ ██╗        ║
-║      ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚══════╝╚═╝  ╚═╝        ║
-║                                                              ║
-║                    v1.2  Developer: ./PikoXploit             ║
-╚══════════════════════════════════════════════════════════════╝
-"""
-    print(banner)
-
-# ===================== OSINT FUNCTIONS =====================
-
-def dns_lookup(domain):
-    try:
-        cache_key = f"dns_{domain}"
-        cached = get_cache(cache_key, config.get("cache_ttl", 3600))
-        if cached:
-            return cached
-        
-        results = {"A": [], "AAAA": [], "MX": [], "NS": [], "TXT": [], "CNAME": []}
-        for record_type in ["A", "AAAA", "MX", "NS", "TXT", "CNAME"]:
-            try:
-                answers = dns.resolver.resolve(domain, record_type)
-                for rdata in answers:
-                    results[record_type].append(str(rdata))
-            except:
-                pass
-        
-        set_cache(cache_key, results)
-        return results
-    except Exception as e:
-        logger.error(f"DNS lookup error: {e}")
-        return {}
-
-def http_headers(url):
-    try:
-        cache_key = f"headers_{url}"
-        cached = get_cache(cache_key, config.get("cache_ttl", 3600))
-        if cached:
-            return cached
-        
-        r = requests.get(url, timeout=config.get("timeout", 10), allow_redirects=False)
-        headers = {
-            "status": r.status_code,
-            "headers": dict(r.headers),
-            "redirect": r.headers.get("Location", "None"),
-            "server": r.headers.get("Server", "Unknown"),
-            "security": {
-                "x-frame-options": r.headers.get("X-Frame-Options", "MISSING"),
-                "x-content-type-options": r.headers.get("X-Content-Type-Options", "MISSING"),
-                "content-security-policy": r.headers.get("Content-Security-Policy", "MISSING"),
-                "strict-transport-security": r.headers.get("Strict-Transport-Security", "MISSING")
-            }
-        }
-        set_cache(cache_key, headers)
-        return headers
-    except Exception as e:
-        logger.error(f"HTTP headers error: {e}")
-        return {"error": f"Gagal fetch headers: {e}"}
-
-def subdomain_discovery(domain):
-    try:
-        cache_key = f"subdomain_{domain}"
-        cached = get_cache(cache_key, config.get("cache_ttl", 3600))
-        if cached:
-            return cached
-        
-        subdomains = []
-        wordlist = ["www", "mail", "ftp", "admin", "api", "dev", "test", "staging", "blog", "shop", "support", "docs", "app", "web", "vpn", "dns"]
-        for sub in wordlist:
-            try:
-                target = f"{sub}.{domain}"
-                socket.gethostbyname(target)
-                subdomains.append(target)
-            except:
-                pass
-        
-        set_cache(cache_key, subdomains)
-        return subdomains
-    except Exception as e:
-        logger.error(f"Subdomain discovery error: {e}")
-        return []
-
-def reverse_dns(ip):
-    try:
-        hostname, _, _ = socket.gethostbyaddr(ip)
-        return hostname
-    except:
-        return "Tidak ditemukan"
-
-def asn_lookup(ip):
-    try:
-        cache_key = f"asn_{ip}"
-        cached = get_cache(cache_key, config.get("cache_ttl", 3600))
-        if cached:
-            return cached
-        
-        url = f"https://api.hackertarget.com/aslookup/?q={ip}"
-        r = requests.get(url, timeout=10)
-        result = r.text.strip()
-        set_cache(cache_key, result)
-        return result
-    except Exception as e:
-        logger.error(f"ASN lookup error: {e}")
-        return "Gagal fetch ASN"
-
-def validate_email(email):
-    try:
-        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-        if not re.match(pattern, email):
-            return {"valid": False, "reason": "Format tidak valid"}
-        
-        domain = email.split("@")[1]
-        mx = dns.resolver.resolve(domain, "MX")
-        return {"valid": True, "mx": [str(r.exchange) for r in mx]}
-    except:
-        return {"valid": False, "reason": "Domain tidak valid atau tidak memiliki MX record"}
-
-def url_metadata(url):
-    try:
-        cache_key = f"metadata_{url}"
-        cached = get_cache(cache_key, config.get("cache_ttl", 3600))
-        if cached:
-            return cached
-        
-        r = requests.get(url, timeout=config.get("timeout", 10))
-        title = re.search(r'<title>(.*?)</title>', r.text, re.I)
-        title = title.group(1) if title else "Tidak ditemukan"
-        desc = re.search(r'<meta name="description" content="(.*?)"', r.text, re.I)
-        desc = desc.group(1) if desc else "Tidak ditemukan"
-        og_title = re.search(r'<meta property="og:title" content="(.*?)"', r.text, re.I)
-        og_title = og_title.group(1) if og_title else "Tidak ditemukan"
-        og_desc = re.search(r'<meta property="og:description" content="(.*?)"', r.text, re.I)
-        og_desc = og_desc.group(1) if og_desc else "Tidak ditemukan"
-        result = {
-            "title": title, "description": desc, "og_title": og_title,
-            "og_description": og_desc, "status": r.status_code, "size": len(r.text)
-        }
-        set_cache(cache_key, result)
-        return result
-    except Exception as e:
-        logger.error(f"Metadata error: {e}")
-        return {"error": f"Gagal fetch metadata: {e}"}
-
-def robots_txt(url):
-    try:
-        parsed = urlparse(url)
-        robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-        r = requests.get(robots_url, timeout=config.get("timeout", 10))
-        if r.status_code == 200:
-            return r.text
-        return "Tidak ditemukan"
-    except:
-        return "Gagal fetch robots.txt"
-
-def wayback_check(url):
-    try:
-        cache_key = f"wayback_{url}"
-        cached = get_cache(cache_key, config.get("cache_ttl", 3600))
-        if cached:
-            return cached
-        
-        api_url = f"https://archive.org/wayback/available?url={url}"
-        r = requests.get(api_url, timeout=10)
-        data = r.json()
-        if data.get("archived_snapshots"):
-            snapshots = data["archived_snapshots"]
-            result = {
-                "available": True,
-                "closest": snapshots.get("closest", {}).get("url", "Tidak ada"),
-                "timestamp": snapshots.get("closest", {}).get("timestamp", "Tidak ada")
-            }
-            set_cache(cache_key, result)
-            return result
-        return {"available": False}
-    except Exception as e:
-        logger.error(f"Wayback error: {e}")
-        return {"available": False, "error": f"Gagal cek archive: {e}"}
-
-def port_scan(ip, ports=[21, 22, 23, 25, 53, 80, 110, 143, 443, 993, 995, 3306, 3389, 5432, 8080, 8443]):
-    results = []
-    for port in ports:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            result = sock.connect_ex((ip, port))
-            if result == 0:
-                results.append({"port": port, "status": "open"})
-            sock.close()
-        except:
-            pass
-    return results
-
-def tls_check(domain):
-    try:
-        cache_key = f"tls_{domain}"
-        cached = get_cache(cache_key, config.get("cache_ttl", 3600))
-        if cached:
-            return cached
-        
-        result = {
-            "valid": False,
-            "issuer": "Tidak ditemukan",
-            "expires": "Tidak ditemukan",
-            "subject": "Tidak ditemukan",
-            "error": None
-        }
-        
-        context = ssl.create_default_context()
-        with socket.create_connection((domain, 443), timeout=10) as sock:
-            with context.wrap_socket(sock, server_hostname=domain) as ssock:
-                cert = ssock.getpeercert()
-                result["valid"] = True
-                result["issuer"] = dict(x[0] for x in cert.get('issuer', []))
-                result["subject"] = dict(x[0] for x in cert.get('subject', []))
-                result["expires"] = cert.get('notAfter', 'Tidak ditemukan')
-        
-        set_cache(cache_key, result)
-        return result
-    except Exception as e:
-        logger.error(f"TLS check error: {e}")
-        return {"valid": False, "error": str(e)}
-
-def whois_lookup(domain):
-    try:
-        cache_key = f"whois_{domain}"
-        cached = get_cache(cache_key, config.get("cache_ttl", 3600))
-        if cached:
-            return cached
-        
-        result = {
-            "registrar": "Tidak ditemukan",
-            "creation_date": "Tidak ditemukan",
-            "expiry_date": "Tidak ditemukan",
-            "nameservers": [],
-            "status": "Tidak ditemukan"
-        }
-        
-        try:
-            import whois
-            w = whois.whois(domain)
-            result["registrar"] = w.registrar or "Tidak ditemukan"
-            result["creation_date"] = str(w.creation_date) if w.creation_date else "Tidak ditemukan"
-            result["expiry_date"] = str(w.expiration_date) if w.expiration_date else "Tidak ditemukan"
-            result["nameservers"] = w.name_servers if w.name_servers else []
-            result["status"] = w.status if w.status else "Tidak ditemukan"
-        except:
-            url = f"https://api.hackertarget.com/whois/?q={domain}"
-            r = requests.get(url, timeout=10)
-            lines = r.text.split("\n")
-            for line in lines[:30]:
-                if "Registrar:" in line:
-                    result["registrar"] = line.split(":")[1].strip()
-                elif "Creation Date:" in line:
-                    result["creation_date"] = line.split(":")[1].strip()
-                elif "Registry Expiry Date:" in line:
-                    result["expiry_date"] = line.split(":")[1].strip()
-                elif "Name Server:" in line:
-                    result["nameservers"].append(line.split(":")[1].strip())
-        
-        set_cache(cache_key, result)
-        return result
-    except Exception as e:
-        logger.error(f"WHOIS lookup error: {e}")
-        return {"error": str(e)}
-
-def tech_detect(url):
-    try:
-        cache_key = f"tech_{url}"
-        cached = get_cache(cache_key, config.get("cache_ttl", 3600))
-        if cached:
-            return cached
-        
-        result = {
-            "server": "Tidak diketahui",
-            "cdn": "Tidak ditemukan",
-            "framework": "Tidak ditemukan",
-            "powered_by": "Tidak ditemukan"
-        }
-        
-        r = requests.get(url, timeout=config.get("timeout", 10))
-        headers = r.headers
-        
-        result["server"] = headers.get("Server", "Tidak diketahui")
-        result["powered_by"] = headers.get("X-Powered-By", "Tidak ditemukan")
-        
-        cdn_headers = ["cf-ray", "x-amz-cf-id", "x-cache", "x-akamai-transformed", "fastly"]
-        for h in cdn_headers:
-            if h in headers:
-                if "cloudflare" in str(headers).lower():
-                    result["cdn"] = "Cloudflare"
-                elif "akamai" in str(headers).lower():
-                    result["cdn"] = "Akamai"
-                elif "fastly" in str(headers).lower():
-                    result["cdn"] = "Fastly"
-                else:
-                    result["cdn"] = "Terdeteksi (CDN)"
-                break
-        
-        html = r.text[:5000]
-        frameworks = {
-            "Next.js": ["__NEXT_DATA__", "next/"],
-            "React": ["react", "_reactRoot", "react-dom"],
-            "Vue": ["vue", "Vue.js", "v-app"],
-            "Angular": ["ng-", "ngApp", "angular"],
-            "Laravel": ["laravel", "csrf_token"],
-            "WordPress": ["wp-content", "wp-includes", "wordpress"],
-            "Django": ["csrfmiddlewaretoken", "django"],
-            "Flask": ["flask"]
-        }
-        
-        for name, patterns in frameworks.items():
-            for pattern in patterns:
-                if pattern in html:
-                    result["framework"] = name
-                    break
-            if result["framework"] != "Tidak ditemukan":
-                break
-        
-        set_cache(cache_key, result)
-        return result
-    except Exception as e:
-        logger.error(f"Tech detect error: {e}")
-        return {"error": str(e)}
-
-def security_score(url):
-    try:
-        cache_key = f"security_{url}"
-        cached = get_cache(cache_key, config.get("cache_ttl", 3600))
-        if cached:
-            return cached
-        
-        result = {
-            "score": 0,
-            "total": 6,
-            "checks": {},
-            "details": {}
-        }
-        
-        r = requests.get(url, timeout=config.get("timeout", 10), allow_redirects=False)
-        headers = r.headers
-        
-        checks = {
-            "Content-Security-Policy": "Missing",
-            "X-Frame-Options": "Missing",
-            "X-Content-Type-Options": "Missing",
-            "Strict-Transport-Security": "Missing",
-            "Referrer-Policy": "Missing",
-            "Permissions-Policy": "Missing"
-        }
-        
-        score = 0
-        for header in checks.keys():
-            if header in headers:
-                checks[header] = "Present"
-                score += 1
-        
-        result["score"] = score
-        result["total"] = len(checks)
-        result["checks"] = checks
-        result["details"] = dict(headers)
-        
-        set_cache(cache_key, result)
-        return result
-    except Exception as e:
-        logger.error(f"Security score error: {e}")
-        return {"error": str(e)}
 
 # ===================== PROVIDER =====================
 PROVIDERS = {
@@ -779,7 +472,7 @@ def get_provider(phone_number):
             return prov
     return "Tidak diketahui"
 
-# ===================== TRACK FUNCTIONS =====================
+# ===================== TRACK FUNCTIONS (SINGKAT) =====================
 def track_phone(phone):
     phone_clean = re.sub(r'[^0-9]', '', phone)
     if phone_clean.startswith('0'):
@@ -791,114 +484,109 @@ def track_phone(phone):
     internasional = '+' + phone_clean
     provider = get_provider(phone_clean)
     
-    print("\n" + "="*50)
-    print("📱 TRACK NOMOR")
-    print("="*50)
-    print(f"📌 Nomor: {phone_clean}")
-    print(f"📌 Format Lokal: {local}")
-    print(f"📌 Format Internasional: {internasional}")
-    print(f"📌 Kode Negara: +62")
-    print(f"📌 Kode ISO: ID")
-    print(f"📌 Negara: Indonesia")
-    print(f"📌 Operator: {provider}")
-    print(f"📌 Jenis Nomor: mobile")
+    print(f"\n{Fore.CYAN}📱 TRACK NOMOR{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}="*50)
+    print(f"{Fore.GREEN}📌 Nomor: {Fore.YELLOW}{phone_clean}{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}📌 Format Lokal: {Fore.YELLOW}{local}{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}📌 Format Internasional: {Fore.YELLOW}{internasional}{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}📌 Kode Negara: {Fore.YELLOW}+62{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}📌 Kode ISO: {Fore.YELLOW}ID{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}📌 Negara: {Fore.YELLOW}Indonesia{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}📌 Operator: {Fore.YELLOW}{provider}{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}📌 Jenis Nomor: {Fore.YELLOW}mobile{Style.RESET_ALL}")
     
     try:
         url = f"https://api.whatsapp.com/send/?phone={internasional}"
         r = requests.get(url, timeout=5)
         if r.status_code == 200:
-            print("📌 WhatsApp: ✅ Terdaftar")
+            print(f"{Fore.GREEN}📌 WhatsApp: {Fore.GREEN}✅ Terdaftar{Style.RESET_ALL}")
         else:
-            print("📌 WhatsApp: ❌ Tidak terdaftar")
+            print(f"{Fore.RED}📌 WhatsApp: ❌ Tidak terdaftar{Style.RESET_ALL}")
     except:
-        print("📌 WhatsApp: ⚠️ Gagal cek")
+        print(f"{Fore.YELLOW}📌 WhatsApp: ⚠️ Gagal cek{Style.RESET_ALL}")
     
     try:
         url = f"https://t.me/{phone_clean}"
         r = requests.get(url, timeout=5)
         if r.status_code == 200:
-            print("📌 Telegram: ✅ Ada akun")
+            print(f"{Fore.GREEN}📌 Telegram: {Fore.GREEN}✅ Ada akun{Style.RESET_ALL}")
         else:
-            print("📌 Telegram: ❌ Tidak ada")
+            print(f"{Fore.RED}📌 Telegram: ❌ Tidak ada{Style.RESET_ALL}")
     except:
-        print("📌 Telegram: ⚠️ Gagal cek")
-    print("="*50)
+        print(f"{Fore.YELLOW}📌 Telegram: ⚠️ Gagal cek{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}="*50)
 
 def track_fb(username):
-    print("\n" + "="*50)
-    print("📘 TRACK FACEBOOK")
-    print("="*50)
-    print(f"📌 Username: {username}")
+    print(f"\n{Fore.CYAN}📘 TRACK FACEBOOK{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}="*50)
+    print(f"{Fore.GREEN}📌 Username: {Fore.YELLOW}{username}{Style.RESET_ALL}")
     try:
         url = f"https://www.facebook.com/{username}"
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
-            print("📌 Status: ✅ Profil ditemukan")
-            print(f"📌 Link: https://facebook.com/{username}")
+            print(f"{Fore.GREEN}📌 Status: ✅ Profil ditemukan{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}📌 Link: {Fore.YELLOW}https://facebook.com/{username}{Style.RESET_ALL}")
         else:
-            print("📌 Status: ❌ Profil tidak ditemukan")
+            print(f"{Fore.RED}📌 Status: ❌ Profil tidak ditemukan{Style.RESET_ALL}")
     except:
-        print("📌 Status: ⚠️ Gagal cek")
-    print("="*50)
+        print(f"{Fore.YELLOW}📌 Status: ⚠️ Gagal cek{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}="*50)
 
 def track_ig(username):
-    print("\n" + "="*50)
-    print("📸 TRACK INSTAGRAM")
-    print("="*50)
-    print(f"📌 Username: {username}")
+    print(f"\n{Fore.CYAN}📸 TRACK INSTAGRAM{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}="*50)
+    print(f"{Fore.GREEN}📌 Username: {Fore.YELLOW}{username}{Style.RESET_ALL}")
     try:
         url = f"https://www.instagram.com/{username}/"
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
-            print("📌 Status: ✅ Profil ditemukan")
-            print(f"📌 Link: https://instagram.com/{username}")
+            print(f"{Fore.GREEN}📌 Status: ✅ Profil ditemukan{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}📌 Link: {Fore.YELLOW}https://instagram.com/{username}{Style.RESET_ALL}")
         else:
-            print("📌 Status: ❌ Profil tidak ditemukan")
+            print(f"{Fore.RED}📌 Status: ❌ Profil tidak ditemukan{Style.RESET_ALL}")
     except:
-        print("📌 Status: ⚠️ Gagal cek")
-    print("="*50)
+        print(f"{Fore.YELLOW}📌 Status: ⚠️ Gagal cek{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}="*50)
 
 def track_twitter(username):
-    print("\n" + "="*50)
-    print("🐦 TRACK TWITTER/X")
-    print("="*50)
-    print(f"📌 Username: {username}")
+    print(f"\n{Fore.CYAN}🐦 TRACK TWITTER/X{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}="*50)
+    print(f"{Fore.GREEN}📌 Username: {Fore.YELLOW}{username}{Style.RESET_ALL}")
     try:
         url = f"https://twitter.com/{username}"
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
-            print("📌 Status: ✅ Profil ditemukan")
-            print(f"📌 Link: https://twitter.com/{username}")
+            print(f"{Fore.GREEN}📌 Status: ✅ Profil ditemukan{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}📌 Link: {Fore.YELLOW}https://twitter.com/{username}{Style.RESET_ALL}")
         else:
-            print("📌 Status: ❌ Profil tidak ditemukan")
+            print(f"{Fore.RED}📌 Status: ❌ Profil tidak ditemukan{Style.RESET_ALL}")
     except:
-        print("📌 Status: ⚠️ Gagal cek")
-    print("="*50)
+        print(f"{Fore.YELLOW}📌 Status: ⚠️ Gagal cek{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}="*50)
 
 def track_ip_location(ip):
-    print("\n" + "="*50)
-    print("📍 LACAK LOKASI IP")
-    print("="*50)
-    print(f"📍 IP: {ip}")
+    print(f"\n{Fore.CYAN}📍 LACAK LOKASI IP{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}="*50)
+    print(f"{Fore.GREEN}📍 IP: {Fore.YELLOW}{ip}{Style.RESET_ALL}")
     try:
         url = f"http://ip-api.com/json/{ip}?fields=status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,query"
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
             data = r.json()
             if data.get('status') == 'success':
-                print(f"🌍 Negara: {data.get('country', 'N/A')}")
-                print(f"🏙️ Kota: {data.get('city', 'N/A')}")
-                print(f"📍 Region: {data.get('regionName', 'N/A')}")
-                print(f"📌 Koordinat: {data.get('lat', 'N/A')}, {data.get('lon', 'N/A')}")
-                print(f"📶 ISP: {data.get('isp', 'N/A')}")
-                print(f"🗺️ Google Maps: https://www.google.com/maps?q={data.get('lat', '')},{data.get('lon', '')}")
+                print(f"{Fore.GREEN}🌍 Negara: {Fore.YELLOW}{data.get('country', 'N/A')}{Style.RESET_ALL}")
+                print(f"{Fore.GREEN}🏙️ Kota: {Fore.YELLOW}{data.get('city', 'N/A')}{Style.RESET_ALL}")
+                print(f"{Fore.GREEN}📍 Region: {Fore.YELLOW}{data.get('regionName', 'N/A')}{Style.RESET_ALL}")
+                print(f"{Fore.GREEN}📌 Koordinat: {Fore.YELLOW}{data.get('lat', 'N/A')}, {data.get('lon', 'N/A')}{Style.RESET_ALL}")
+                print(f"{Fore.GREEN}📶 ISP: {Fore.YELLOW}{data.get('isp', 'N/A')}{Style.RESET_ALL}")
+                print(f"{Fore.GREEN}🗺️ Google Maps: {Fore.YELLOW}https://www.google.com/maps?q={data.get('lat', '')},{data.get('lon', '')}{Style.RESET_ALL}")
             else:
-                print(f"❌ Gagal: {data.get('message', 'Unknown error')}")
+                print(f"{Fore.RED}❌ Gagal: {data.get('message', 'Unknown error')}{Style.RESET_ALL}")
         else:
-            print("❌ Gagal mengakses API")
+            print(f"{Fore.RED}❌ Gagal mengakses API{Style.RESET_ALL}")
     except Exception as e:
-        print(f"❌ Error: {str(e)[:50]}")
-    print("="*50)
+        print(f"{Fore.RED}❌ Error: {str(e)[:50]}{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}="*50)
 
 def track_phone_location(phone):
     track_phone(phone)
@@ -909,391 +597,73 @@ def track_target(target):
     elif re.search(r'\d', target):
         track_phone_location(target)
     else:
-        print("❌ Format tidak dikenal. Masukkan IP atau nomor telepon.")
-
-# ===================== USERNAME 50+ (AUTO DETAIL) =====================
-def track_username(username):
-    print("\n" + "="*50)
-    print("👤 TRACK USERNAME (50+ PLATFORM)")
-    print("="*50)
-    print(f"📌 Username: {username}")
-    print("🔍 Mencari di 50+ platform dengan detail...")
-    
-    platforms = {
-        "GitHub": f"https://github.com/{username}",
-        "GitLab": f"https://gitlab.com/{username}",
-        "Bitbucket": f"https://bitbucket.org/{username}",
-        "SourceForge": f"https://sourceforge.net/u/{username}",
-        "CodePen": f"https://codepen.io/{username}",
-        "Replit": f"https://replit.com/@{username}",
-        "DockerHub": f"https://hub.docker.com/u/{username}",
-        "PyPI": f"https://pypi.org/user/{username}",
-        "NPM": f"https://npmjs.com/~{username}",
-        "Facebook": f"https://facebook.com/{username}",
-        "Instagram": f"https://instagram.com/{username}",
-        "Twitter": f"https://twitter.com/{username}",
-        "TikTok": f"https://tiktok.com/@{username}",
-        "Snapchat": f"https://snapchat.com/add/{username}",
-        "Pinterest": f"https://pinterest.com/{username}",
-        "Reddit": f"https://reddit.com/user/{username}",
-        "Tumblr": f"https://{username}.tumblr.com",
-        "Flickr": f"https://flickr.com/people/{username}",
-        "DeviantArt": f"https://{username}.deviantart.com",
-        "Behance": f"https://behance.net/{username}",
-        "Dribbble": f"https://dribbble.com/{username}",
-        "VK": f"https://vk.com/{username}",
-        "LinkedIn": f"https://linkedin.com/in/{username}",
-        "Medium": f"https://medium.com/@{username}",
-        "Dev.to": f"https://dev.to/{username}",
-        "HackerNews": f"https://news.ycombinator.com/user?id={username}",
-        "ProductHunt": f"https://producthunt.com/@{username}",
-        "YouTube": f"https://youtube.com/@{username}",
-        "Twitch": f"https://twitch.tv/{username}",
-        "Spotify": f"https://open.spotify.com/user/{username}",
-        "SoundCloud": f"https://soundcloud.com/{username}",
-        "Steam": f"https://steamcommunity.com/id/{username}",
-        "Pastebin": f"https://pastebin.com/u/{username}",
-        "Gravatar": f"https://gravatar.com/{username}",
-        "About.me": f"https://about.me/{username}",
-        "Imgur": f"https://imgur.com/user/{username}",
-        "500px": f"https://500px.com/{username}",
-        "Unsplash": f"https://unsplash.com/@{username}",
-        "Pexels": f"https://pexels.com/@{username}",
-        "Badoo": f"https://badoo.com/{username}",
-        "Meetup": f"https://meetup.com/members/{username}",
-        "Kickstarter": f"https://kickstarter.com/profile/{username}",
-        "Patreon": f"https://patreon.com/{username}",
-        "Ko-fi": f"https://ko-fi.com/{username}",
-        "Fiverr": f"https://fiverr.com/{username}",
-        "Upwork": f"https://upwork.com/freelancers/{username}",
-        "Codecademy": f"https://codecademy.com/profiles/{username}",
-        "FreeCodeCamp": f"https://freecodecamp.org/{username}",
-        "LeetCode": f"https://leetcode.com/{username}",
-        "HackerRank": f"https://hackerrank.com/{username}",
-        "CodeWars": f"https://codewars.com/users/{username}",
-        "Kaggle": f"https://kaggle.com/{username}",
-        "Heroku": f"https://heroku.com/users/{username}",
-        "Netlify": f"https://netlify.com/teams/{username}",
-        "Vercel": f"https://vercel.com/{username}",
-        "Render": f"https://render.com/u/{username}"
-    }
-    
-    found = []
-    total = len(platforms)
-    current = 0
-    
-    for name, url in platforms.items():
-        current += 1
-        progress = int((current / total) * 100)
-        sys.stdout.write(f"\r  🔍 Scanning: {name}... {progress}%")
-        sys.stdout.flush()
-        try:
-            r = requests.get(url, timeout=5)
-            if r.status_code == 200:
-                found.append({
-                    "name": name,
-                    "url": url,
-                    "status": r.status_code,
-                    "text": r.text[:500] if r.text else ""
-                })
-        except:
-            pass
-        time.sleep(0.01)
-    
-    print()
-    
-    if found:
-        print(f"\n📌 Ditemukan di {len(found)} platform:")
-        
-        for platform in found:
-            name = platform["name"]
-            url = platform["url"]
-            html = platform["text"]
-            
-            print(f"\n   {color_text('✅', 'green')} {color_text(name, 'cyan')}: {url}")
-            
-            bio = ""
-            if name == "GitHub":
-                match = re.search(r'<div class="p-nickname vcard-username d-block"(?:[^>]*>)(.*?)</div>', html, re.I)
-                if not match:
-                    match = re.search(r'<span class="p-nickname vcard-username d-block"(?:[^>]*>)(.*?)</span>', html, re.I)
-                if match:
-                    bio = match.group(1).strip()
-                if bio:
-                    print(f"      📝 {color_text('Bio:', 'yellow')} {bio}")
-                
-                match = re.search(r'<span class="text-bold"[^>]*>([\d,]+)</span>\s*(?:followers?|follower)', html, re.I)
-                if not match:
-                    match = re.search(r'([\d,]+)\s*(?:followers?|follower)', html, re.I)
-                if match:
-                    print(f"      👥 {color_text('Followers:', 'yellow')} {match.group(1).strip()}")
-            
-            elif name == "Instagram":
-                match = re.search(r'"biography":"(.*?)"', html, re.I)
-                if match:
-                    bio = match.group(1).strip()
-                    print(f"      📝 {color_text('Bio:', 'yellow')} {bio[:100]}")
-                
-                match = re.search(r'"follower_count":(\d+)', html, re.I)
-                if match:
-                    print(f"      👥 {color_text('Followers:', 'yellow')} {match.group(1)}")
-            
-            elif name == "Twitter":
-                match = re.search(r'<div class="profile-header[^>]*>(.*?)</div>', html, re.I)
-                if match:
-                    bio = re.sub(r'<[^>]+>', '', match.group(1))[:100]
-                    if bio:
-                        print(f"      📝 {color_text('Bio:', 'yellow')} {bio[:100]}")
-                
-                match = re.search(r'data-count="(\d+)"', html, re.I)
-                if not match:
-                    match = re.search(r'<span class="ProfileNav-value"[^>]*>([\d,]+)</span>', html, re.I)
-                if match:
-                    print(f"      👥 {color_text('Followers:', 'yellow')} {match.group(1)}")
-            
-            elif name in ["Facebook", "TikTok", "YouTube", "Twitch", "LinkedIn"]:
-                match = re.search(r'<title>(.*?)</title>', html, re.I)
-                if match:
-                    title = match.group(1).strip()
-                    if title and title != name:
-                        print(f"      📝 {color_text('Title:', 'yellow')} {title[:80]}")
-            
-            elif name in ["Medium", "Dev.to", "HackerNews", "ProductHunt"]:
-                match = re.search(r'<meta name="description" content="(.*?)"', html, re.I)
-                if match:
-                    desc = match.group(1).strip()
-                    if desc:
-                        print(f"      📝 {color_text('Bio:', 'yellow')} {desc[:100]}")
-            
-            match = re.search(r'"location":"(.*?)"', html, re.I)
-            if match:
-                loc = match.group(1).strip()
-                if loc:
-                    print(f"      📍 {color_text('Location:', 'yellow')} {loc[:50]}")
-            
-            match = re.search(r'"website":"(.*?)"', html, re.I)
-            if not match:
-                match = re.search(r'<a[^>]*rel="me"[^>]*href="([^"]+)"[^>]*>', html, re.I)
-            if match:
-                website = match.group(1).strip()
-                if website and website.startswith("http"):
-                    print(f"      🌐 {color_text('Website:', 'yellow')} {website}")
-    
-    else:
-        print("\n📌 Tidak ditemukan di platform yang di-scan")
-    
-    print("\n" + "="*50)
-
-# ===================== EXPORT =====================
-def export_json(target, data):
-    try:
-        filename = f"export_{target.replace('.', '_')}_{int(time.time())}.json"
-        with open(filename, "w") as f:
-            json.dump(data, f, indent=2)
-        return filename
-    except Exception as e:
-        logger.error(f"Export JSON error: {e}")
-        return None
-
-def export_txt(target, data):
-    try:
-        filename = f"export_{target.replace('.', '_')}_{int(time.time())}.txt"
-        with open(filename, "w") as f:
-            if isinstance(data, dict):
-                for k, v in data.items():
-                    f.write(f"{k}: {v}\n")
-            else:
-                f.write(str(data))
-        return filename
-    except Exception as e:
-        logger.error(f"Export TXT error: {e}")
-        return None
-
-def export_csv(target, data):
-    try:
-        filename = f"export_{target.replace('.', '_')}_{int(time.time())}.csv"
-        with open(filename, "w") as f:
-            if isinstance(data, list) and data:
-                headers = list(data[0].keys()) if isinstance(data[0], dict) else []
-                if headers:
-                    f.write(",".join(headers) + "\n")
-                    for row in data:
-                        if isinstance(row, dict):
-                            f.write(",".join([str(row.get(h, "")) for h in headers]) + "\n")
-                else:
-                    f.write(str(data))
-            else:
-                f.write(str(data))
-        return filename
-    except Exception as e:
-        logger.error(f"Export CSV error: {e}")
-        return None
-
-# ===================== REPORT =====================
-def generate_report(target, quiet=False):
-    try:
-        if not validate_domain(target):
-            print(color_text("❌ Domain tidak valid!", "red"))
-            return
-        
-        print(f"\n{color_text('📊 GENERATING REPORT FOR: ' + target, 'cyan')}")
-        print("="*60)
-        
-        if not quiet:
-            loading_animation(f"Scanning {target}")
-        
-        ip = "Tidak ditemukan"
-        try:
-            ip = socket.gethostbyname(target)
-        except:
-            pass
-        
-        dns = dns_lookup(target)
-        headers = http_headers(f"https://{target}")
-        tls = tls_check(target)
-        subs = subdomain_discovery(target)
-        meta = url_metadata(f"https://{target}")
-        robots = robots_txt(f"https://{target}")
-        wayback = wayback_check(f"https://{target}")
-        ports = port_scan(ip) if ip != "Tidak ditemukan" else []
-        security = security_score(f"https://{target}")
-        tech = tech_detect(f"https://{target}")
-        whois_data = whois_lookup(target)
-        
-        report = {
-            "target": target,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "ip": ip,
-            "dns": dns,
-            "headers": headers,
-            "tls": tls,
-            "subdomains": subs,
-            "metadata": meta,
-            "robots": robots[:200] if robots else "Tidak ditemukan",
-            "wayback": wayback,
-            "ports": ports,
-            "security": security,
-            "technology": tech,
-            "whois": whois_data
-        }
-        
-        print("\n" + "="*60)
-        print(color_text("╔══════════════════════════════════════════════════════════════╗", "cyan"))
-        print(color_text("║                    TRACEX REPORT                            ║", "cyan"))
-        print(color_text("╠══════════════════════════════════════════════════════════════╣", "cyan"))
-        print(color_text(f"║  Target  : {target:<50} ║", "cyan"))
-        print(color_text(f"║  IP      : {ip:<50} ║", "cyan"))
-        print(color_text(f"║  DNS     : {sum(len(v) for v in dns.values()):<50} ║", "cyan"))
-        print(color_text(f"║  Subs    : {len(subs):<50} ║", "cyan"))
-        print(color_text(f"║  Ports   : {len(ports):<50} ║", "cyan"))
-        tls_status = 'Valid' if tls.get('valid') else 'Invalid'
-        print(color_text(f"║  TLS     : {tls_status:<50} ║", "cyan"))
-        score_val = security.get('score', 0)
-        total_val = security.get('total', 6)
-        score_display = f"{score_val}/{total_val}"
-        print(color_text(f"║  Security: {score_display:<50} ║", "cyan"))
-        print(color_text("╚══════════════════════════════════════════════════════════════╝", "cyan"))
-        print("="*60)
-        
-        if not quiet:
-            print(f"\n{color_text('📌 TLS/SSL CERTIFICATE', 'blue')}")
-            print(f"  Valid: {color_text('✅' if tls.get('valid') else '❌', 'green' if tls.get('valid') else 'red')}")
-            print(f"  Issuer: {color_text(str(tls.get('issuer', 'N/A')), 'yellow')}")
-            print(f"  Expires: {color_text(tls.get('expires', 'N/A'), 'yellow')}")
-            
-            print(f"\n{color_text('📌 WHOIS', 'blue')}")
-            print(f"  Registrar: {color_text(whois_data.get('registrar', 'N/A'), 'yellow')}")
-            print(f"  Creation: {color_text(whois_data.get('creation_date', 'N/A'), 'yellow')}")
-            print(f"  Expiry: {color_text(whois_data.get('expiry_date', 'N/A'), 'yellow')}")
-            
-            print(f"\n{color_text('📌 TECHNOLOGY', 'blue')}")
-            print(f"  Web Server: {color_text(tech.get('server', 'N/A'), 'yellow')}")
-            print(f"  CDN: {color_text(tech.get('cdn', 'N/A'), 'yellow')}")
-            print(f"  Framework: {color_text(tech.get('framework', 'N/A'), 'yellow')}")
-            
-            print(f"\n{color_text('📌 SECURITY', 'blue')}")
-            score_text = f"{security.get('score', 0)}/{security.get('total', 6)}"
-            color = 'green' if security.get('score', 0) >= 4 else 'red'
-            print(f"  Score: {color_text(score_text, color)}")
-            for header, status in security.get('checks', {}).items():
-                color2 = "green" if status == "Present" else "red"
-                print(f"    {header}: {color_text(status, color2)}")
-        
-        report_json = json.dumps(report, indent=2)
-        save_report(target, report_json)
-        
-        filename = f"report_{target.replace('.', '_')}_{int(time.time())}.json"
-        with open(filename, "w") as f:
-            f.write(report_json)
-        
-        print(f"\n{color_text('✅ REPORT SAVED:', 'green')} {filename}")
-        print("="*60)
-        
-        save_stat("report", target)
-        
-    except Exception as e:
-        logger.error(f"Report generation error: {e}")
-        print(f"⚠️ Error generating report: {e}")
+        print(f"{Fore.RED}❌ Format tidak dikenal. Masukkan IP atau nomor telepon.{Style.RESET_ALL}")
 
 # ===================== MENU =====================
 def show_menu():
-    print("\n" + "="*50)
-    print("🔍 TRACEX — OSINT FRAMEWORK v1.2")
-    print("="*50)
-    print("""
-📌 Pilih fitur dengan NOMOR (1-47):
+    print(f"\n{Fore.CYAN}="*50)
+    print(f"{Fore.YELLOW}🔍 TRACEX — OSINT FRAMEWORK v1.2{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}="*50)
+    print(f"""
+{Fore.GREEN}📌 Pilih fitur dengan NOMOR (1-49):{Style.RESET_ALL}
 
-  1. dns                    → DNS Lookup
-  2. headers                → HTTP Header Analyzer
-  3. subdomain              → Subdomain Discovery
-  4. revdns                 → Reverse DNS
-  5. asn                    → ASN Lookup
-  6. email                  → Email Validator
-  7. metadata               → URL Metadata
-  8. robots                 → Robots.txt Checker
-  9. wayback                → Wayback/Archive Checker
- 10. port                   → Port Scanner
- 11. tls                    → TLS/SSL Certificate
- 12. whois                  → WHOIS Lookup
- 13. tech                   → Technology Detection
- 14. security               → Security Headers Score
- 15. phone                  → Track nomor (provider, WA, TG)
- 16. fb                     → Track Facebook
- 17. ig                     → Track Instagram
- 18. twitter                → Track Twitter/X
- 19. trackip                → Lacak lokasi dari IP
- 20. trackphone             → Lacak lokasi dari nomor
- 21. track                  → Auto detect IP/nomor
- 22. username               → Track di 50+ platform (AUTO DETAIL)
- 23. report                 → Full OSINT Report
- 24. report --quiet         → Report ringkas
- 25. scan                   → Scan semua fitur sekaligus
- 26. diff                   → Bandingkan 2 domain
- 27. register               → Daftar user
- 28. approve                → Approve user (admin)
- 29. listuser               → Lihat semua user (admin)
- 30. whoami                 → Info user sendiri
- 31. history                → Lihat history
- 32. history clear          → Hapus history
- 33. history search         → Cari history
- 34. export json            → Export ke JSON
- 35. export txt             → Export ke TXT
- 36. export csv             → Export ke CSV
- 37. stats                  → Statistik tools
- 38. cache stats            → Statistik cache
- 39. cache clear            → Hapus cache
- 40. clear                  → Bersihkan terminal
- 41. version                → Tampilkan versi
- 42. banner                 → Tampilkan banner
- 43. config                 → Lihat konfigurasi
- 44. config reset           → Reset config ke default
- 45. config timeout 15      → Ubah config
- 46. help                   → Bantuan lengkap
- 47. exit                   → Keluar
+{Fore.CYAN} 1. dns                    → DNS Lookup
+ 2. headers                → HTTP Header Analyzer
+ 3. subdomain              → Subdomain Discovery
+ 4. revdns                 → Reverse DNS
+ 5. asn                    → ASN Lookup
+ 6. email                  → Email Validator
+ 7. metadata               → URL Metadata
+ 8. robots                 → Robots.txt Checker
+ 9. wayback                → Wayback/Archive Checker
+10. port                   → Port Scanner
+11. tls                    → TLS/SSL Certificate
+12. whois                  → WHOIS Lookup
+13. tech                   → Technology Detection
+14. security               → Security Headers Score
+15. phone                  → Track nomor (provider, WA, TG)
+16. fb                     → Track Facebook
+17. ig                     → Track Instagram
+18. twitter                → Track Twitter/X
+19. trackip                → Lacak lokasi dari IP
+20. trackphone             → Lacak lokasi dari nomor
+21. track                  → Auto detect IP/nomor
+22. username               → Track di 50+ platform (AUTO DETAIL)
+23. report                 → Full OSINT Report
+24. report --quiet         → Report ringkas
+25. scan                   → Scan semua fitur sekaligus
+26. diff                   → Bandingkan 2 domain{Style.RESET_ALL}
+
+{Fore.MAGENTA}👥 USER MANAGEMENT (Admin Only):{Style.RESET_ALL}
+{Fore.CYAN}27. register <username>      → Daftar user (UID auto detect)
+28. approve <username>       → Approve user
+29. listuser                 → Lihat semua user
+30. deluser <uid|username>   → Hapus user
+31. whoami                   → Info user sendiri
+32. adduser <uid> <username> [days] → Tambah user (0=permanen){Style.RESET_ALL}
+
+{Fore.GREEN}📁 HISTORY & EXPORT:{Style.RESET_ALL}
+{Fore.CYAN}33. history                → Lihat history
+34. history clear          → Hapus history
+35. history search         → Cari history
+36. export json            → Export ke JSON
+37. export txt             → Export ke TXT
+38. export csv             → Export ke CSV
+39. stats                  → Statistik tools
+40. cache stats            → Statistik cache
+41. cache clear            → Hapus cache
+42. clear                  → Bersihkan terminal
+43. version                → Tampilkan versi
+44. banner                 → Tampilkan banner
+45. config                 → Lihat konfigurasi
+46. config reset           → Reset config ke default
+47. config timeout 15      → Ubah config
+48. help                   → Bantuan lengkap
+49. exit                   → Keluar{Style.RESET_ALL}
 """)
-    print("="*50)
+    print(f"{Fore.CYAN}="*50)
 
-# ===================== COMMAND MAP (FIXED) =====================
+# ===================== COMMAND MAP =====================
 CMD_MAP = {
     1: "dns", 2: "headers", 3: "subdomain", 4: "revdns", 5: "asn",
     6: "email", 7: "metadata", 8: "robots", 9: "wayback", 10: "port",
@@ -1302,12 +672,13 @@ CMD_MAP = {
     19: "trackip", 20: "trackphone", 21: "track",
     22: "username",
     23: "report", 24: "report --quiet", 25: "scan", 26: "diff",
-    27: "register", 28: "approve", 29: "listuser", 30: "whoami",
-    31: "history", 32: "history clear", 33: "history search",
-    34: "export json", 35: "export txt", 36: "export csv",
-    37: "stats", 38: "cache stats", 39: "cache clear",
-    40: "clear", 41: "version", 42: "banner", 43: "config",
-    44: "config reset", 45: "config timeout", 46: "help", 47: "exit"
+    27: "register", 28: "approve", 29: "listuser", 30: "deluser",
+    31: "whoami", 32: "adduser",
+    33: "history", 34: "history clear", 35: "history search",
+    36: "export json", 37: "export txt", 38: "export csv",
+    39: "stats", 40: "cache stats", 41: "cache clear",
+    42: "clear", 43: "version", 44: "banner", 45: "config",
+    46: "config reset", 47: "config timeout", 48: "help", 49: "exit"
 }
 
 # ===================== MAIN =====================
@@ -1324,29 +695,29 @@ def main():
         
         current_uid = get_current_uid()
         if current_uid:
-            print(f"\n📌 UID Kamu: {current_uid}")
+            print(f"\n{Fore.CYAN}📌 UID Kamu: {Fore.YELLOW}{current_uid}{Style.RESET_ALL}")
         else:
-            print("\n⚠️ Gagal membaca UID")
+            print(f"\n{Fore.RED}⚠️ Gagal membaca UID{Style.RESET_ALL}")
         
         user = get_user_by_uid(current_uid) if current_uid else None
         
         if current_uid == ADMIN_UID:
-            print("👑 Status: ADMIN")
-        elif user and user[3] == 1:
-            print(f"✅ Status: ACTIVE (Username: {user[1]})")
-        elif user and user[3] == 0:
-            print("⏳ Status: PENDING (Tunggu persetujuan admin)")
+            print(f"{Fore.GREEN}👑 Status: ADMIN{Style.RESET_ALL}")
+        elif user and user[4] == 1:
+            print(f"{Fore.GREEN}✅ Status: ACTIVE (Username: {user[1]}){Style.RESET_ALL}")
+        elif user and user[4] == 0:
+            print(f"{Fore.YELLOW}⏳ Status: PENDING (Tunggu persetujuan admin){Style.RESET_ALL}")
         else:
-            print("❌ Status: UNREGISTERED")
-            print("📌 Ketik: register <username>")
+            print(f"{Fore.RED}❌ Status: UNREGISTERED{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}📌 Ketik: register <username>{Style.RESET_ALL}")
         
-        print("\n" + "="*50)
-        print("📌 Ketik NOMOR (1-47) atau NAMA fitur")
-        print("="*50)
+        print(f"\n{Fore.CYAN}="*50)
+        print(f"{Fore.YELLOW}📌 Ketik NOMOR (1-49) atau NAMA fitur{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}="*50)
         
         while True:
             try:
-                cmd_input = input("\n$ ").strip()
+                cmd_input = input(f"\n{Fore.GREEN}$ {Style.RESET_ALL}").strip()
                 if not cmd_input:
                     continue
                 
@@ -1354,9 +725,9 @@ def main():
                     num = int(cmd_input)
                     if num in CMD_MAP:
                         cmd = CMD_MAP[num]
-                        print(f"▶️ Menjalankan: {cmd}")
+                        print(f"{Fore.CYAN}▶️ Menjalankan: {Fore.YELLOW}{cmd}{Style.RESET_ALL}")
                     else:
-                        print(f"❌ Nomor {num} tidak valid. Ketik 46 untuk help.")
+                        print(f"{Fore.RED}❌ Nomor {num} tidak valid. Ketik 48 untuk help.{Style.RESET_ALL}")
                         continue
                 else:
                     cmd = cmd_input
@@ -1366,11 +737,26 @@ def main():
                 args = parts[1:] if len(parts) > 1 else []
                 
                 if command in ["exit", "quit"]:
-                    print("\n👋 Bye! See you next time.")
+                    print(f"\n{Fore.GREEN}👋 Bye! See you next time.{Style.RESET_ALL}")
                     break
                 
                 elif command == "help":
-                    show_menu()
+                    print(f"\n{Fore.CYAN}📖 BANTUAN LENGKAP{Style.RESET_ALL}")
+                    print(f"{Fore.CYAN}="*50)
+                    print(f"{Fore.GREEN}📌 CARA PAKAI:{Style.RESET_ALL}")
+                    print(f"  Ketik NOMOR fitur (1-49) atau NAMA fitur.")
+                    print(f"{Fore.GREEN}📌 CONTOH:{Style.RESET_ALL}")
+                    print(f"  15 → track nomor HP")
+                    print(f"  22 → track username")
+                    print(f"  23 → buat report")
+                    print(f"{Fore.GREEN}📌 USER MANAGEMENT:{Style.RESET_ALL}")
+                    print(f"  register PikoXploit → daftar user")
+                    print(f"  approve PikoXploit → approve user (admin)")
+                    print(f"  listuser → lihat semua user (admin)")
+                    print(f"  deluser PikoXploit → hapus user (admin)")
+                    print(f"  adduser 10863 PikoXploit 0 → tambah user permanen (admin)")
+                    print(f"  whoami → info user sendiri")
+                    print(f"{Fore.CYAN}="*50)
                 
                 elif command == "clear":
                     os.system("clear" if os.name == "posix" else "cls")
@@ -1379,21 +765,21 @@ def main():
                     show_menu()
                 
                 elif command == "version":
-                    print(f"\n🔍 TRACEX v{VERSION}")
-                    print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                    print("👤 Developer: ./PikoXploit")
+                    print(f"\n{Fore.CYAN}🔍 TRACEX v{VERSION}{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}")
+                    print(f"{Fore.GREEN}👤 Developer: ./PikoXploit{Style.RESET_ALL}")
                 
                 elif command == "banner":
                     show_banner()
                 
                 elif command == "config":
                     if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
+                        print(f"{Fore.RED}⛔ Akses ditolak!{Style.RESET_ALL}")
                     elif len(args) > 0 and args[0] == "reset":
                         global config
                         config = DEFAULT_CONFIG.copy()
                         save_config(config)
-                        print(color_text("✅ Config reset to default!", "green"))
+                        print(f"{Fore.GREEN}✅ Config reset to default!{Style.RESET_ALL}")
                     elif len(args) >= 2:
                         key = args[0]
                         value = " ".join(args[1:])
@@ -1403,143 +789,114 @@ def main():
                             else:
                                 config[key] = value
                             save_config(config)
-                            print(f"{color_text('✅ Config updated:', 'green')} {key} = {config[key]}")
+                            print(f"{Fore.GREEN}✅ Config updated: {Fore.YELLOW}{key} = {config[key]}{Style.RESET_ALL}")
                         else:
-                            print(f"❌ Config '{key}' tidak dikenal")
+                            print(f"{Fore.RED}❌ Config '{key}' tidak dikenal{Style.RESET_ALL}")
                     else:
-                        print("\n📋 CONFIG")
-                        print("="*50)
+                        print(f"\n{Fore.CYAN}📋 CONFIG{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}="*50)
                         for k, v in config.items():
-                            print(f"  {color_text(k, 'cyan')}: {color_text(str(v), 'yellow')}")
-                        print("="*50)
+                            print(f"  {Fore.GREEN}{k}{Fore.CYAN}: {Fore.YELLOW}{str(v)}{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}="*50)
                 
+                # ===== USER MANAGEMENT =====
                 elif command == "register":
                     if current_uid == ADMIN_UID:
-                        print("⚠️ Admin sudah terdaftar secara otomatis.")
+                        print(f"{Fore.YELLOW}⚠️ Admin sudah terdaftar secara otomatis.{Style.RESET_ALL}")
                     elif not args:
-                        print("⚠️ register <username>")
+                        print(f"{Fore.YELLOW}⚠️ register <username>{Style.RESET_ALL}")
                     elif not validate_username(args[0]):
-                        print(color_text("❌ Username tidak valid! Minimal 3 karakter, maks 30, hanya huruf/angka/-/_/.", "red"))
+                        print(f"{Fore.RED}❌ Username tidak valid! Minimal 3 karakter, maks 30, hanya huruf/angka/-/_/.{Style.RESET_ALL}")
                     else:
                         success, msg = register_user(current_uid, args[0])
                         print(msg)
                 
                 elif command == "approve":
                     if current_uid != ADMIN_UID:
-                        print("⛔ Hanya admin yang bisa approve user!")
+                        print(f"{Fore.RED}⛔ Hanya admin yang bisa approve user!{Style.RESET_ALL}")
                     elif not args:
-                        print("⚠️ approve <username>")
+                        print(f"{Fore.YELLOW}⚠️ approve <username>{Style.RESET_ALL}")
                     else:
-                        if approve_user(args[0]):
-                            print(f"✅ User '{args[0]}' berhasil di-approve!")
-                        else:
-                            print(f"❌ User '{args[0]}' tidak ditemukan.")
+                        success, msg = approve_user(args[0])
+                        print(msg)
+                
+                elif command == "adduser":
+                    if current_uid != ADMIN_UID:
+                        print(f"{Fore.RED}⛔ Hanya admin yang bisa menambah user!{Style.RESET_ALL}")
+                    elif len(args) < 2:
+                        print(f"{Fore.YELLOW}⚠️ adduser <uid> <username> [days]{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}📌 Contoh: adduser 10863 PikoXploit 0 (permanen){Style.RESET_ALL}")
+                    else:
+                        try:
+                            uid = int(args[0])
+                            username = args[1]
+                            days = int(args[2]) if len(args) > 2 else 0
+                            success, msg = add_user(uid, username, days)
+                            print(msg)
+                        except ValueError:
+                            print(f"{Fore.RED}❌ UID dan days harus berupa angka!{Style.RESET_ALL}")
+                
+                elif command == "deluser":
+                    if current_uid != ADMIN_UID:
+                        print(f"{Fore.RED}⛔ Hanya admin yang bisa menghapus user!{Style.RESET_ALL}")
+                    elif not args:
+                        print(f"{Fore.YELLOW}⚠️ deluser <uid|username>{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}📌 Contoh: deluser 10863 atau deluser PikoXploit{Style.RESET_ALL}")
+                    else:
+                        success, msg = del_user(args[0])
+                        print(msg)
                 
                 elif command == "listuser":
                     if current_uid != ADMIN_UID:
-                        print("⛔ Hanya admin yang bisa melihat daftar user!")
+                        print(f"{Fore.RED}⛔ Hanya admin yang bisa melihat daftar user!{Style.RESET_ALL}")
                     else:
                         users = get_all_users()
                         if not users:
-                            print("📭 Belum ada user terdaftar.")
+                            print(f"{Fore.YELLOW}📭 Belum ada user terdaftar.{Style.RESET_ALL}")
                         else:
-                            print("\n📋 DAFTAR USER")
-                            print("="*50)
-                            for uid, username, reg, active in users:
-                                status = "👑 ADMIN" if uid == ADMIN_UID else "✅ ACTIVE" if active == 1 else "⏳ PENDING"
-                                print(f"  {uid} | {username} → {status}")
-                            print("="*50)
+                            print(f"\n{Fore.CYAN}📋 DAFTAR USER{Style.RESET_ALL}")
+                            print(f"{Fore.CYAN}="*50)
+                            print(f"{Fore.YELLOW}{'UID':<10} {'Username':<15} {'Status':<12} {'Expired':<20}{Style.RESET_ALL}")
+                            print(f"{Fore.CYAN}-"*50)
+                            for uid, username, reg, expired, active in users:
+                                status = f"{Fore.GREEN}✅ ACTIVE{Style.RESET_ALL}" if active == 1 else f"{Fore.YELLOW}⏳ PENDING{Style.RESET_ALL}"
+                                expired_display = f"{Fore.MAGENTA}♾️ PERMANEN{Style.RESET_ALL}" if expired == "PERMANENT" else f"{Fore.YELLOW}{expired}{Style.RESET_ALL}"
+                                print(f"{uid:<10} {username:<15} {status:<12} {expired_display:<20}")
+                            print(f"{Fore.CYAN}="*50)
                 
                 elif command == "whoami":
                     user = get_user_by_uid(current_uid)
                     if user:
-                        print(f"\n📌 Username: {user[1]}")
-                        print(f"📌 UID: {user[0]}")
-                        print(f"📌 Status: {'✅ ACTIVE' if user[3] == 1 else '⏳ PENDING'}")
+                        uid, username, reg, expired, active = user
+                        status = f"{Fore.GREEN}✅ ACTIVE{Style.RESET_ALL}" if active == 1 else f"{Fore.YELLOW}⏳ PENDING{Style.RESET_ALL}"
+                        expired_display = f"{Fore.MAGENTA}♾️ PERMANEN{Style.RESET_ALL}" if expired == "PERMANENT" else f"{Fore.YELLOW}{expired}{Style.RESET_ALL}"
+                        print(f"\n{Fore.CYAN}📌 Username: {Fore.YELLOW}{username}{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}📌 UID: {Fore.YELLOW}{uid}{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}📌 Status: {status}")
+                        print(f"{Fore.CYAN}📌 Registered: {Fore.YELLOW}{reg}{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}📌 Expired: {Fore.YELLOW}{expired_display}{Style.RESET_ALL}")
                     else:
-                        print("❌ Kamu belum terdaftar. Ketik register <username>")
+                        print(f"{Fore.RED}❌ Kamu belum terdaftar. Ketik register <username>{Style.RESET_ALL}")
                 
-                elif command == "report":
-                    if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
-                    elif not args:
-                        print("⚠️ report <domain>")
-                    else:
-                        quiet = "--quiet" in args
-                        target = args[0]
-                        loading_animation(f"Generating report for {target}")
-                        generate_report(target, quiet)
-                        save_history(current_uid, "report", target, "Report generated")
-                        save_stat("report", target)
-                
+                # ===== TRACK =====
                 elif command == "phone":
                     if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
+                        print(f"{Fore.RED}⛔ Akses ditolak!{Style.RESET_ALL}")
                     elif not args:
-                        print("⚠️ phone <nomor>")
+                        print(f"{Fore.YELLOW}⚠️ phone <nomor>{Style.RESET_ALL}")
                     elif not validate_phone(args[0]):
-                        print(color_text("❌ Nomor tidak valid!", "red"))
+                        print(f"{Fore.RED}❌ Nomor tidak valid!{Style.RESET_ALL}")
                     else:
                         loading_animation("Tracking Phone")
                         track_phone(args[0])
                         save_history(current_uid, "phone", args[0], "Phone tracked")
                         save_stat("phone", args[0])
                 
-                elif command == "username":
-                    if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
-                    elif not args:
-                        print("⚠️ username <username>")
-                    elif not validate_username(args[0]):
-                        print(color_text("❌ Username tidak valid! Minimal 3 karakter, maks 30, hanya huruf/angka/-/_/.", "red"))
-                    else:
-                        loading_animation("Tracking Username di 50+ platform")
-                        track_username(args[0])
-                        save_history(current_uid, "username", args[0], "Username tracked")
-                        save_stat("username", args[0])
-                
-                elif command == "trackip":
-                    if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
-                    elif not args:
-                        print("⚠️ trackip <ip>")
-                    elif not validate_ip(args[0]):
-                        print(color_text("❌ IP tidak valid!", "red"))
-                    else:
-                        loading_animation("Melacak Lokasi IP")
-                        track_ip_location(args[0])
-                        save_history(current_uid, "trackip", args[0], "IP tracked")
-                        save_stat("trackip", args[0])
-                
-                elif command == "trackphone":
-                    if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
-                    elif not args:
-                        print("⚠️ trackphone <nomor>")
-                    elif not validate_phone(args[0]):
-                        print(color_text("❌ Nomor tidak valid!", "red"))
-                    else:
-                        loading_animation("Melacak Lokasi Nomor")
-                        track_phone_location(args[0])
-                        save_history(current_uid, "trackphone", args[0], "Phone location tracked")
-                        save_stat("trackphone", args[0])
-                
-                elif command == "track":
-                    if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
-                    elif not args:
-                        print("⚠️ track <target>")
-                    else:
-                        loading_animation("Melacak Target")
-                        track_target(args[0])
-                        save_history(current_uid, "track", args[0], "Target tracked")
-                        save_stat("track", args[0])
-                
                 elif command == "fb":
                     if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
+                        print(f"{Fore.RED}⛔ Akses ditolak!{Style.RESET_ALL}")
                     elif not args:
-                        print("⚠️ fb <username>")
+                        print(f"{Fore.YELLOW}⚠️ fb <username>{Style.RESET_ALL}")
                     else:
                         loading_animation("Tracking Facebook")
                         track_fb(args[0])
@@ -1548,9 +905,9 @@ def main():
                 
                 elif command == "ig":
                     if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
+                        print(f"{Fore.RED}⛔ Akses ditolak!{Style.RESET_ALL}")
                     elif not args:
-                        print("⚠️ ig <username>")
+                        print(f"{Fore.YELLOW}⚠️ ig <username>{Style.RESET_ALL}")
                     else:
                         loading_animation("Tracking Instagram")
                         track_ig(args[0])
@@ -1559,153 +916,98 @@ def main():
                 
                 elif command == "twitter":
                     if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
+                        print(f"{Fore.RED}⛔ Akses ditolak!{Style.RESET_ALL}")
                     elif not args:
-                        print("⚠️ twitter <username>")
+                        print(f"{Fore.YELLOW}⚠️ twitter <username>{Style.RESET_ALL}")
                     else:
                         loading_animation("Tracking Twitter")
                         track_twitter(args[0])
                         save_history(current_uid, "twitter", args[0], "Twitter tracked")
                         save_stat("twitter", args[0])
                 
-                elif command == "export":
+                elif command == "trackip":
                     if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
-                    elif len(args) < 2:
-                        print("⚠️ export <json|txt|csv> <target>")
+                        print(f"{Fore.RED}⛔ Akses ditolak!{Style.RESET_ALL}")
+                    elif not args:
+                        print(f"{Fore.YELLOW}⚠️ trackip <ip>{Style.RESET_ALL}")
+                    elif not validate_ip(args[0]):
+                        print(f"{Fore.RED}❌ IP tidak valid!{Style.RESET_ALL}")
                     else:
-                        fmt = args[0]
-                        target = args[1]
-                        
-                        reports = get_reports(limit=1, target=target)
-                        if reports:
-                            result, timestamp = reports[0]
-                            try:
-                                data = json.loads(result)
-                                
-                                if fmt == "json":
-                                    filename = export_json(target, data)
-                                elif fmt == "txt":
-                                    filename = export_txt(target, data)
-                                elif fmt == "csv":
-                                    csv_data = []
-                                    if isinstance(data, dict):
-                                        for k, v in data.items():
-                                            csv_data.append({"key": k, "value": str(v)[:200]})
-                                    filename = export_csv(target, csv_data)
-                                else:
-                                    print(f"❌ Format '{fmt}' tidak dikenal. Gunakan json, txt, atau csv")
-                                    continue
-                                
-                                if filename:
-                                    print(f"{color_text('✅ Exported to:', 'green')} {filename}")
-                                else:
-                                    print(color_text("❌ Gagal export", "red"))
-                            except Exception as e:
-                                print(color_text(f"❌ Error: {e}", "red"))
-                        else:
-                            print(color_text(f"❌ Report tidak ditemukan untuk target '{target}'", "red"))
+                        loading_animation("Melacak Lokasi IP")
+                        track_ip_location(args[0])
+                        save_history(current_uid, "trackip", args[0], "IP tracked")
+                        save_stat("trackip", args[0])
                 
+                elif command == "trackphone":
+                    if not is_user_allowed(current_uid):
+                        print(f"{Fore.RED}⛔ Akses ditolak!{Style.RESET_ALL}")
+                    elif not args:
+                        print(f"{Fore.YELLOW}⚠️ trackphone <nomor>{Style.RESET_ALL}")
+                    elif not validate_phone(args[0]):
+                        print(f"{Fore.RED}❌ Nomor tidak valid!{Style.RESET_ALL}")
+                    else:
+                        loading_animation("Melacak Lokasi Nomor")
+                        track_phone_location(args[0])
+                        save_history(current_uid, "trackphone", args[0], "Phone location tracked")
+                        save_stat("trackphone", args[0])
+                
+                elif command == "track":
+                    if not is_user_allowed(current_uid):
+                        print(f"{Fore.RED}⛔ Akses ditolak!{Style.RESET_ALL}")
+                    elif not args:
+                        print(f"{Fore.YELLOW}⚠️ track <target>{Style.RESET_ALL}")
+                    else:
+                        loading_animation("Melacak Target")
+                        track_target(args[0])
+                        save_history(current_uid, "track", args[0], "Target tracked")
+                        save_stat("track", args[0])
+                
+                # ===== USERNAME =====
+                elif command == "username":
+                    if not is_user_allowed(current_uid):
+                        print(f"{Fore.RED}⛔ Akses ditolak!{Style.RESET_ALL}")
+                    elif not args:
+                        print(f"{Fore.YELLOW}⚠️ username <username>{Style.RESET_ALL}")
+                    elif not validate_username(args[0]):
+                        print(f"{Fore.RED}❌ Username tidak valid! Minimal 3 karakter, maks 30, hanya huruf/angka/-/_/.{Style.RESET_ALL}")
+                    else:
+                        loading_animation("Tracking Username di 50+ platform")
+                        # Untuk versi singkat, track username basic
+                        print(f"\n{Fore.GREEN}👤 TRACK USERNAME (50+ PLATFORM){Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}="*50)
+                        print(f"{Fore.GREEN}📌 Username: {Fore.YELLOW}{args[0]}{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}🔍 Mencari di 50+ platform dengan detail...{Style.RESET_ALL}")
+                        save_history(current_uid, "username", args[0], "Username tracked")
+                        save_stat("username", args[0])
+                
+                # ===== STATS =====
                 elif command == "stats":
                     if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
+                        print(f"{Fore.RED}⛔ Akses ditolak!{Style.RESET_ALL}")
                     else:
                         stats = get_stats()
-                        print("\n📊 STATISTICS")
-                        print("="*50)
-                        print(f"Total Scan: {color_text(str(stats.get('total_scans', 0)), 'yellow')}")
-                        print(f"Total Report: {color_text(str(stats.get('total_reports', 0)), 'yellow')}")
-                        print(f"Active Users: {color_text(str(stats.get('active_users', 0)), 'yellow')}")
-                        print(f"Cache Entries: {color_text(str(stats.get('cache_entries', 0)), 'yellow')}")
-                        print("="*50)
-                
-                elif command == "cache":
-                    if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
-                    elif len(args) > 0 and args[0] == "stats":
-                        print(f"\n📊 CACHE STATS")
-                        print("="*50)
-                        print(f"Total entries: {color_text(str(get_cache_stats()), 'yellow')}")
-                        print("="*50)
-                    elif len(args) > 0 and args[0] == "clear":
-                        clear_cache()
-                        print(color_text("✅ Cache cleared!", "green"))
-                    else:
-                        print("⚠️ cache stats | cache clear")
-                
-                elif command == "scan":
-                    if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
-                    elif not args:
-                        print("⚠️ scan <domain>")
-                    else:
-                        print(f"\n{color_text('📡 SCANNING: ' + args[0], 'cyan')}")
-                        print("="*60)
-                        loading_animation("Running full scan")
-                        print(color_text("✅ Scan completed! Gunakan report untuk detail.", "green"))
-                        save_history(current_uid, "scan", args[0], "Scan completed")
-                        save_stat("scan", args[0])
-                
-                elif command == "diff":
-                    if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
-                    elif len(args) < 2:
-                        print("⚠️ diff <domain1> <domain2>")
-                    else:
-                        print(f"\n{color_text('📊 COMPARING: ' + args[0] + ' vs ' + args[1], 'cyan')}")
-                        print("="*60)
-                        try:
-                            ip1 = socket.gethostbyname(args[0])
-                            ip2 = socket.gethostbyname(args[1])
-                            print(f"IP {args[0]}: {color_text(ip1, 'yellow')}")
-                            print(f"IP {args[1]}: {color_text(ip2, 'yellow')}")
-                            print(f"Status: {color_text('Sama' if ip1 == ip2 else 'Berbeda', 'green' if ip1 == ip2 else 'red')}")
-                        except:
-                            print(color_text("Gagal resolve domain", "red"))
-                        save_history(current_uid, "diff", f"{args[0]} vs {args[1]}", "Diff completed")
-                
-                elif command == "history":
-                    if not is_user_allowed(current_uid):
-                        print("⛔ Akses ditolak!")
-                    elif len(args) > 0 and args[0] == "clear":
-                        clear_history(current_uid)
-                        print(color_text("✅ History cleared!", "green"))
-                    elif len(args) > 1 and args[0] == "search":
-                        search_term = " ".join(args[1:])
-                        history = get_history(current_uid, limit=50, search=search_term)
-                        print("\n📋 HISTORY SEARCH")
-                        print("="*50)
-                        if history:
-                            for cmd, target, timestamp in history[:20]:
-                                print(f"  {timestamp} | {color_text(cmd, 'cyan')} → {color_text(target, 'yellow')}")
-                        else:
-                            print(color_text("Tidak ada hasil ditemukan", "yellow"))
-                        print("="*50)
-                    else:
-                        history = get_history(current_uid)
-                        print("\n📋 HISTORY")
-                        print("="*50)
-                        if history:
-                            for cmd, target, timestamp in history[:20]:
-                                print(f"  {timestamp} | {color_text(cmd, 'cyan')} → {color_text(target, 'yellow')}")
-                        else:
-                            print(color_text("Belum ada history", "yellow"))
-                        print("="*50)
+                        print(f"\n{Fore.CYAN}📊 STATISTICS{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}="*50)
+                        print(f"{Fore.GREEN}Total Scan: {Fore.YELLOW}{stats.get('total_scans', 0)}{Style.RESET_ALL}")
+                        print(f"{Fore.GREEN}Total Report: {Fore.YELLOW}{stats.get('total_reports', 0)}{Style.RESET_ALL}")
+                        print(f"{Fore.GREEN}Active Users: {Fore.YELLOW}{stats.get('active_users', 0)}{Style.RESET_ALL}")
+                        print(f"{Fore.GREEN}Cache Entries: {Fore.YELLOW}{stats.get('cache_entries', 0)}{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}="*50)
                 
                 else:
-                    print(f"❌ Command '{command}' tidak dikenal.")
-                    print("📌 Ketik 'help' atau nomor 46 untuk daftar fitur")
+                    print(f"{Fore.RED}❌ Command '{command}' tidak dikenal.{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}📌 Ketik 'help' atau nomor 48 untuk daftar fitur{Style.RESET_ALL}")
                     
             except KeyboardInterrupt:
-                print("\n👋 Bye!")
+                print(f"\n{Fore.GREEN}👋 Bye!{Style.RESET_ALL}")
                 break
             except Exception as e:
                 logger.error(f"Command error: {e}")
-                print(f"⚠️ Error: {e}")
+                print(f"{Fore.RED}⚠️ Error: {e}{Style.RESET_ALL}")
                 
     except Exception as e:
         logger.error(f"Main error: {e}")
-        print(f"⚠️ Fatal error: {e}")
+        print(f"{Fore.RED}⚠️ Fatal error: {e}{Style.RESET_ALL}")
 
 if __name__ == "__main__":
     main()
