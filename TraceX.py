@@ -31,7 +31,7 @@ ADMIN_EMAIL = "ficoyoga42@gmail.com"
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_USER = "ficoyoga42@gmail.com"
-SMTP_PASS = "app_password_here"  # Ganti pake App Password Google
+SMTP_PASS = "prbf mahk armx hsin"  # Ganti pake App Password Google
 # =======================================================
 
 # ===================== LOGGING =====================
